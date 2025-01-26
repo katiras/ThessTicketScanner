@@ -11,31 +11,38 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.airbnb.lottie.compose.LottieAnimation
+import com.airbnb.lottie.compose.LottieCompositionSpec
+import com.airbnb.lottie.compose.LottieConstants
+import com.airbnb.lottie.compose.rememberLottieComposition
 import com.katiras.thessticketscanner.ui.theme.ThessTicketScannerTheme
 import java.io.IOException
-import com.airbnb.lottie.compose.*
-import androidx.compose.ui.text.style.TextAlign
-
-
-
 
 class MainActivity : ComponentActivity() {
     private var nfcAdapter: NfcAdapter? = null
@@ -51,7 +58,6 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ThessTicketScannerTheme {
-                // Use the state variables directly in your composables.
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Box(
                         modifier = Modifier
@@ -59,10 +65,8 @@ class MainActivity : ComponentActivity() {
                             .padding(innerPadding),
                         contentAlignment = Alignment.Center
                     ) {
-                        // Pass state variables to CounterDisplay composable
                         CounterDisplay(
                             text = displayedCounterValue,
-                            tagId = tagId,
                             isScanned = isScanned,
                             onScanAgain = {
                                 // Reset the state when scan again button is clicked.
@@ -80,7 +84,6 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
 
-        // Check if the intent contains an NFC tag.
         if (intent.action == NfcAdapter.ACTION_TAG_DISCOVERED) {
             val nfcTag: Tag? = getNfcTagFromIntent(intent)
             nfcTag?.let {
@@ -90,12 +93,9 @@ class MainActivity : ComponentActivity() {
                         card.connect()
                         val counterValue = fetchFirstCounter(card)
                         val tagIdValue = it.id.joinToString(separator = "") { byte -> "%02X".format(byte) }
-
-                        // Update state here directly to trigger recomposition.
                         displayedCounterValue = getRemainingTripsFromFirstCounter(counterValue).toString()
                         tagId = tagIdValue
                         isScanned = true
-
                     } catch (e: IOException) {
                         Log.e("NFC", "Error connecting to MIFARE Ultralight EV1 card", e)
                     } finally {
@@ -151,12 +151,9 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-
-
 @Composable
 fun CounterDisplay(
     text: String,
-    tagId: String,
     isScanned: Boolean,
     onScanAgain: () -> Unit
 ) {
@@ -194,7 +191,6 @@ fun CounterDisplay(
 
                 Spacer(modifier = Modifier.height(24.dp))
             } else {
-                // Show Lottie Animation Before Scan
                 Text(
                     text = "Σκανάρετε ένα εισιτήριο...",
                     fontSize = 24.sp,
@@ -234,7 +230,6 @@ fun CounterDisplay(
     }
 
 }
-
 
 fun getNfcTagFromIntent(intent: Intent?): Tag? {
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
