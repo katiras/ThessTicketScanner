@@ -16,11 +16,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -37,53 +42,95 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.airbnb.lottie.compose.LottieAnimation
 import com.airbnb.lottie.compose.LottieCompositionSpec
 import com.airbnb.lottie.compose.LottieConstants
 import com.airbnb.lottie.compose.rememberLottieComposition
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdSize
+import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.MobileAds
 import com.katiras.thessticketscanner.ui.theme.ThessTicketScannerTheme
 import java.io.IOException
 
+private const val LOG_TAG = "NFC"
+private const val SCAN_PROMPT = "Σκανάρετε ένα εισιτήριο..."
+private const val AVAILABLE_TRIPS_TITLE = "Διαθέσιμες διαδρομές"
+private const val RESCAN_PROMPT = "Σκανάρετε ξανά"
+private const val AD_UNIT_ID = "ca-app-pub-3940256099942544/6300978111"
+private const val ERROR_CONNECT_MSG = "Error connecting to MIFARE Ultralight EV1 card"
+private const val INVALID_COUNTER_MSG = "Invalid counter value"
+private const val ERROR_READING_COUNTER_MSG = "Error reading first counter"
+
 class MainActivity : ComponentActivity() {
     private var nfcAdapter: NfcAdapter? = null
-    private var displayedCounterValue by mutableStateOf("Σκανάρετε ένα εισιτήριο...")
-    private var tagId by mutableStateOf("")
+    private var displayedCounterValue by mutableStateOf(SCAN_PROMPT)
     private var isScanned by mutableStateOf(false)
+    private lateinit var topAdView: AdView
+    private lateinit var bottomAdView: AdView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
-
+        MobileAds.initialize(this)
+        topAdView = AdView(this).also {
+            it.setAdSize(AdSize.FULL_BANNER)
+            it.adUnitId = AD_UNIT_ID
+        }
+        bottomAdView = AdView(this).also {
+            it.setAdSize(AdSize.FULL_BANNER)
+            it.adUnitId = AD_UNIT_ID
+        }
+        topAdView.loadAd(AdRequest.Builder().build())
+        bottomAdView.loadAd(AdRequest.Builder().build())
         setContent {
             ThessTicketScannerTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CounterDisplay(
-                            text = displayedCounterValue,
-                            isScanned = isScanned,
-                            onScanAgain = {
-                                // Reset the state when scan again button is clicked.
-                                displayedCounterValue = "Σκανάρετε ένα εισιτήριο..."
-                                tagId = ""
-                                isScanned = false
-                            }
-                        )
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .padding(WindowInsets.statusBars.asPaddingValues())
+                                .fillMaxWidth()
+                                .wrapContentHeight()
+                        ) {
+                            AdBanner(adView = topAdView)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .weight(10f)
+                                .fillMaxSize()
+                                .padding(innerPadding),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CounterDisplay(
+                                text = displayedCounterValue,
+                                isScanned = isScanned,
+                                onScanAgain = {
+                                    displayedCounterValue = SCAN_PROMPT
+                                    isScanned = false
+                                    enableNfcForegroundDispatch()
+                                }
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .padding(WindowInsets.navigationBars.asPaddingValues())
+                                .fillMaxWidth()
+                                .wrapContentHeight()
+                        ) {
+                            AdBanner(adView = bottomAdView)
+                        }
                     }
                 }
             }
         }
+        enableNfcForegroundDispatch()
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-
         if (intent.action == NfcAdapter.ACTION_TAG_DISCOVERED) {
             val nfcTag: Tag? = getNfcTagFromIntent(intent)
             nfcTag?.let {
@@ -94,20 +141,19 @@ class MainActivity : ComponentActivity() {
                         val counterValue = fetchFirstCounter(card)
                         val tagIdValue = it.id.joinToString(separator = "") { byte -> "%02X".format(byte) }
                         displayedCounterValue = getRemainingTripsFromFirstCounter(counterValue).toString()
-                        tagId = tagIdValue
                         isScanned = true
                     } catch (e: IOException) {
-                        Log.e("NFC", "Error connecting to MIFARE Ultralight EV1 card", e)
+                        Log.e(LOG_TAG, ERROR_CONNECT_MSG, e)
                     } finally {
                         card.close()
+                        nfcAdapter?.disableForegroundDispatch(this)
                     }
                 }
             }
         }
     }
 
-    override fun onResume() {
-        super.onResume()
+    private fun enableNfcForegroundDispatch() {
         val intent = Intent(this, javaClass).apply {
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
@@ -122,14 +168,10 @@ class MainActivity : ComponentActivity() {
         nfcAdapter?.disableForegroundDispatch(this)
     }
 
-
     private fun getRemainingTripsFromFirstCounter(input: Int): Int {
         val hexString = input.toString(16)
-
         val trimmedHex = hexString.takeLast(4).padStart(4, '0')
-
         val decimalValue = trimmedHex.toInt(16)
-
         return 65535 - decimalValue
     }
 
@@ -141,11 +183,11 @@ class MainActivity : ComponentActivity() {
                         ((response[1].toInt() and 0xFF) shl 8) or
                         ((response[2].toInt() and 0xFF) shl 16)
             } else {
-                Log.e("NFC", "Invalid counter value")
+                Log.e(LOG_TAG, INVALID_COUNTER_MSG)
                 -1
             }
         } catch (e: IOException) {
-            Log.e("NFC", "Error reading first counter", e)
+            Log.e(LOG_TAG, ERROR_READING_COUNTER_MSG, e)
             -1
         }
     }
@@ -162,7 +204,6 @@ fun CounterDisplay(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-
         Column(
             modifier = Modifier
                 .align(Alignment.Center)
@@ -172,14 +213,12 @@ fun CounterDisplay(
         ) {
             if (isScanned) {
                 Text(
-                    text = "Διαθέσιμες διαδρομές",
+                    text = AVAILABLE_TRIPS_TITLE,
                     fontSize = 24.sp,
                     fontWeight = FontWeight.SemiBold,
                     textAlign = TextAlign.Center
                 )
-
                 Spacer(modifier = Modifier.height(24.dp))
-
                 Text(
                     text = text,
                     fontSize = 64.sp,
@@ -188,28 +227,25 @@ fun CounterDisplay(
                     lineHeight = 42.sp,
                     modifier = Modifier.fillMaxWidth()
                 )
-
                 Spacer(modifier = Modifier.height(24.dp))
             } else {
                 Text(
-                    text = "Σκανάρετε ένα εισιτήριο...",
+                    text = SCAN_PROMPT,
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center
                 )
-
                 Spacer(modifier = Modifier.height(20.dp))
-
                 val composition by rememberLottieComposition(LottieCompositionSpec.RawRes(R.raw.nfc_animation))
                 LottieAnimation(
                     composition = composition,
                     iterations = LottieConstants.IterateForever,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
                         .height(300.dp)
                 )
             }
         }
-
         if (isScanned) {
             Button(
                 onClick = onScanAgain,
@@ -221,14 +257,21 @@ fun CounterDisplay(
                 contentPadding = PaddingValues(vertical = 16.dp)
             ) {
                 Text(
-                    text = "Σκανάρετε ξανα",
+                    text = RESCAN_PROMPT,
                     color = Color.White,
                     style = MaterialTheme.typography.bodyLarge
                 )
             }
         }
     }
+}
 
+@Composable
+fun AdBanner(adView: AdView) {
+    AndroidView(
+        factory = { adView },
+        modifier = Modifier.fillMaxWidth()
+    )
 }
 
 fun getNfcTagFromIntent(intent: Intent?): Tag? {
