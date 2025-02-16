@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
     private var isScanned by mutableStateOf(false)
     private lateinit var topAdView: AdView
     private lateinit var bottomAdView: AdView
+    private var isReadyToScan by mutableStateOf(true)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -110,6 +111,7 @@ class MainActivity : ComponentActivity() {
                                 onScanAgain = {
                                     displayedCounterValue = SCAN_PROMPT
                                     isScanned = false
+                                    isReadyToScan = true
                                     enableNfcForegroundDispatch()
                                 }
                             )
@@ -126,7 +128,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        enableNfcForegroundDispatch()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -146,6 +147,7 @@ class MainActivity : ComponentActivity() {
                         Log.e(LOG_TAG, ERROR_CONNECT_MSG, e)
                     } finally {
                         card.close()
+                        isReadyToScan = false
                         nfcAdapter?.disableForegroundDispatch(this)
                     }
                 }
@@ -166,6 +168,13 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         nfcAdapter?.disableForegroundDispatch(this)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (isReadyToScan) {
+            enableNfcForegroundDispatch()
+        }
     }
 
     private fun getRemainingTripsFromFirstCounter(input: Int): Int {
