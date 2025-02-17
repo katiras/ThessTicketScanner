@@ -148,7 +148,6 @@ class MainActivity : ComponentActivity() {
                     } finally {
                         card.close()
                         isReadyToScan = false
-                        nfcAdapter?.disableForegroundDispatch(this)
                     }
                 }
             }
