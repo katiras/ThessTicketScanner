@@ -1,3 +1,8 @@
 <resources>
     <string name="app_name">Thessaloniki Ticket Scan</string>
+    <string name="scan_prompt">Scan a ticket…</string>
+    <string name="available_trips_title">Available trips</string>
+    <string name="rescan_prompt">Scan again</string>
+    <string name="nfc_disabled_message">Enable NFC in settings to continue.</string>
+    <string name="open_nfc_settings">Open NFC Settings</string>
 </resources>

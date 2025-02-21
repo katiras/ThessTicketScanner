@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Thessaloniki Ticket Scan</string>
+    <string name="scan_prompt">Σκανάρετε ένα εισιτήριο…</string>
+    <string name="available_trips_title">Διαθέσιμες διαδρομές</string>
+    <string name="rescan_prompt">Σκανάρετε ξανά</string>
+    <string name="nfc_disabled_message">Ενεργοποιήστε το NFC στις ρυθμίσεις για να συνεχίσετε.</string>
+    <string name="open_nfc_settings">Άνοιγμα Ρυθμίσεων NFC</string>
+</resources>

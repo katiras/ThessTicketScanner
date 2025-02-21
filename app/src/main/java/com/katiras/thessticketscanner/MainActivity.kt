@@ -1,7 +1,9 @@
 package com.katiras.thessticketscanner
 
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.MifareUltralight
@@ -33,11 +35,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -53,80 +58,43 @@ import com.google.android.gms.ads.AdView
 import com.google.android.gms.ads.MobileAds
 import com.katiras.thessticketscanner.ui.theme.ThessTicketScannerTheme
 import java.io.IOException
+import java.util.Locale
 
 private const val LOG_TAG = "NFC"
-private const val SCAN_PROMPT = "Σκανάρετε ένα εισιτήριο..."
-private const val AVAILABLE_TRIPS_TITLE = "Διαθέσιμες διαδρομές"
-private const val RESCAN_PROMPT = "Σκανάρετε ξανά"
 private const val AD_UNIT_ID = "ca-app-pub-3940256099942544/6300978111"
 private const val ERROR_CONNECT_MSG = "Error connecting to MIFARE Ultralight EV1 card"
 private const val INVALID_COUNTER_MSG = "Invalid counter value"
 private const val ERROR_READING_COUNTER_MSG = "Error reading first counter"
+private const val LANGUAGE = "el"
+private val READ_COUNTER_0_CMD = byteArrayOf(0x39.toByte(), 0x00.toByte())
 
 class MainActivity : ComponentActivity() {
     private var nfcAdapter: NfcAdapter? = null
-    private var displayedCounterValue by mutableStateOf(SCAN_PROMPT)
+    private var remainingTrips by mutableIntStateOf(0)
     private var isScanned by mutableStateOf(false)
-    private lateinit var topAdView: AdView
-    private lateinit var bottomAdView: AdView
     private var isReadyToScan by mutableStateOf(true)
+    private var isAdsInitialized by mutableStateOf(false)
+    private var isNfcEnabled by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
-        MobileAds.initialize(this)
-        topAdView = AdView(this).also {
-            it.setAdSize(AdSize.FULL_BANNER)
-            it.adUnitId = AD_UNIT_ID
-        }
-        bottomAdView = AdView(this).also {
-            it.setAdSize(AdSize.FULL_BANNER)
-            it.adUnitId = AD_UNIT_ID
-        }
-        topAdView.loadAd(AdRequest.Builder().build())
-        bottomAdView.loadAd(AdRequest.Builder().build())
+        MobileAds.initialize(this) { _ -> isAdsInitialized = true }
+        isNfcEnabled = nfcAdapter != null && nfcAdapter!!.isEnabled
+
         setContent {
-            ThessTicketScannerTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Box(
-                            modifier = Modifier
-                                .padding(WindowInsets.statusBars.asPaddingValues())
-                                .fillMaxWidth()
-                                .wrapContentHeight()
-                        ) {
-                            AdBanner(adView = topAdView)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .weight(10f)
-                                .fillMaxSize()
-                                .padding(innerPadding),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CounterDisplay(
-                                text = displayedCounterValue,
-                                isScanned = isScanned,
-                                onScanAgain = {
-                                    displayedCounterValue = SCAN_PROMPT
-                                    isScanned = false
-                                    isReadyToScan = true
-                                    enableNfcForegroundDispatch()
-                                }
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .padding(WindowInsets.navigationBars.asPaddingValues())
-                                .fillMaxWidth()
-                                .wrapContentHeight()
-                        ) {
-                            AdBanner(adView = bottomAdView)
-                        }
-                    }
-                }
-            }
+            MainScreen(
+                remainingTrips = remainingTrips,
+                isScanned = isScanned,
+                onScanAgain = {
+                    isScanned = false
+                    isReadyToScan = true
+                    enableNfcForegroundDispatch()
+                },
+                isAdsInitialized = isAdsInitialized,
+                isNfcEnabled = isNfcEnabled
+            )
         }
     }
 
@@ -134,14 +102,15 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         if (intent.action == NfcAdapter.ACTION_TAG_DISCOVERED) {
             val nfcTag: Tag? = getNfcTagFromIntent(intent)
-            nfcTag?.let {
-                val mifareCard = MifareUltralight.get(it)
+            nfcTag?.let { tag ->
+                val mifareCard = MifareUltralight.get(tag)
                 mifareCard?.let { card ->
                     try {
                         card.connect()
                         val counterValue = fetchFirstCounter(card)
-                        val tagIdValue = it.id.joinToString(separator = "") { byte -> "%02X".format(byte) }
-                        displayedCounterValue = getRemainingTripsFromFirstCounter(counterValue).toString()
+                        val tagIdValue = getTagId(tag)
+                        Log.i(LOG_TAG, tagIdValue)
+                        remainingTrips = getRemainingTrips(counterValue)
                         isScanned = true
                     } catch (e: IOException) {
                         Log.e(LOG_TAG, ERROR_CONNECT_MSG, e)
@@ -171,41 +140,24 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (isReadyToScan) {
+
+        isNfcEnabled = nfcAdapter != null && nfcAdapter!!.isEnabled
+        if (isReadyToScan && isNfcEnabled) {
             enableNfcForegroundDispatch()
         }
     }
 
-    private fun getRemainingTripsFromFirstCounter(input: Int): Int {
-        val hexString = input.toString(16)
-        val trimmedHex = hexString.takeLast(4).padStart(4, '0')
-        val decimalValue = trimmedHex.toInt(16)
-        return 65535 - decimalValue
-    }
-
-    private fun fetchFirstCounter(card: MifareUltralight): Int {
-        return try {
-            val response = card.transceive(byteArrayOf(0x39.toByte(), 0x00.toByte()))
-            if (response.size == 3) {
-                (response[0].toInt() and 0xFF) or
-                        ((response[1].toInt() and 0xFF) shl 8) or
-                        ((response[2].toInt() and 0xFF) shl 16)
-            } else {
-                Log.e(LOG_TAG, INVALID_COUNTER_MSG)
-                -1
-            }
-        } catch (e: IOException) {
-            Log.e(LOG_TAG, ERROR_READING_COUNTER_MSG, e)
-            -1
-        }
+    override fun attachBaseContext(context: Context?) {
+        super.attachBaseContext(forceLocale(context))
     }
 }
 
 @Composable
 fun CounterDisplay(
-    text: String,
+    remainingTrips: Int,
     isScanned: Boolean,
-    onScanAgain: () -> Unit
+    onScanAgain: () -> Unit,
+    isNfcEnabled: Boolean
 ) {
     Box(
         modifier = Modifier
@@ -219,16 +171,18 @@ fun CounterDisplay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            if (isScanned) {
+            if (!isNfcEnabled) {
+                NfcDisabledScreen()
+            } else if (isScanned) {
                 Text(
-                    text = AVAILABLE_TRIPS_TITLE,
+                    text = stringResource(R.string.available_trips_title),
                     fontSize = 24.sp,
                     fontWeight = FontWeight.SemiBold,
                     textAlign = TextAlign.Center
                 )
                 Spacer(modifier = Modifier.height(24.dp))
                 Text(
-                    text = text,
+                    text = remainingTrips.toString(),
                     fontSize = 64.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
@@ -238,7 +192,7 @@ fun CounterDisplay(
                 Spacer(modifier = Modifier.height(24.dp))
             } else {
                 Text(
-                    text = SCAN_PROMPT,
+                    text = stringResource(R.string.scan_prompt),
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center
@@ -254,7 +208,7 @@ fun CounterDisplay(
                 )
             }
         }
-        if (isScanned) {
+        if (isScanned && isNfcEnabled) {
             Button(
                 onClick = onScanAgain,
                 modifier = Modifier
@@ -265,7 +219,7 @@ fun CounterDisplay(
                 contentPadding = PaddingValues(vertical = 16.dp)
             ) {
                 Text(
-                    text = RESCAN_PROMPT,
+                    text = stringResource(R.string.rescan_prompt),
                     color = Color.White,
                     style = MaterialTheme.typography.bodyLarge
                 )
@@ -275,18 +229,150 @@ fun CounterDisplay(
 }
 
 @Composable
-fun AdBanner(adView: AdView) {
-    AndroidView(
-        factory = { adView },
-        modifier = Modifier.fillMaxWidth()
+fun MainScreen(
+    remainingTrips: Int,
+    isScanned: Boolean,
+    onScanAgain: () -> Unit,
+    isAdsInitialized: Boolean,
+    isNfcEnabled: Boolean
+) {
+    ThessTicketScannerTheme {
+        Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+            Column(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .padding(WindowInsets.statusBars.asPaddingValues())
+                        .fillMaxWidth()
+                        .wrapContentHeight()
+                ) {
+                    if (isAdsInitialized) {
+                        AdBanner(adUnitId = AD_UNIT_ID)
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(10f)
+                        .fillMaxSize()
+                        .padding(innerPadding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CounterDisplay(
+                        remainingTrips = remainingTrips,
+                        isScanned = isScanned,
+                        onScanAgain = onScanAgain,
+                        isNfcEnabled = isNfcEnabled
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .padding(WindowInsets.navigationBars.asPaddingValues())
+                        .fillMaxWidth()
+                        .wrapContentHeight()
+                ) {
+                    if (isAdsInitialized) {
+                        AdBanner(adUnitId = AD_UNIT_ID)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AdBanner(adUnitId: String) {
+    AndroidView(factory = { context ->
+        AdView(context).apply {
+            setAdSize(AdSize.FULL_BANNER)
+            this.adUnitId = adUnitId
+            loadAd(AdRequest.Builder().build())
+        }
+    }, update = { adView ->
+        adView.loadAd(AdRequest.Builder().build())
+    }, modifier = Modifier.fillMaxWidth()
     )
+}
+
+@Composable
+fun NfcDisabledScreen() {
+    val context = LocalContext.current
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxHeight(0.8f),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = stringResource(R.string.nfc_disabled_message),
+                fontSize = 18.sp,
+                textAlign = TextAlign.Center,
+                color = Color.Gray
+            )
+        }
+        Button(
+            onClick = {
+                context.startActivity(Intent(android.provider.Settings.ACTION_NFC_SETTINGS))
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 40.dp)
+                .fillMaxWidth(0.9f),
+            colors = ButtonDefaults.buttonColors(containerColor = Color.Blue),
+            contentPadding = PaddingValues(vertical = 16.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.open_nfc_settings),
+                color = Color.White,
+                style = MaterialTheme.typography.bodyLarge
+            )
+        }
+    }
+}
+
+fun getRemainingTrips(input: Int): Int {
+    val hexString = input.toString(16)
+    val trimmedHex = hexString.takeLast(4).padStart(4, '0')
+    val decimalValue = trimmedHex.toInt(16)
+    return 65535 - decimalValue
+}
+
+fun fetchFirstCounter(card: MifareUltralight): Int {
+    return try {
+        val response = card.transceive(READ_COUNTER_0_CMD)
+        if (response.size == 3) {
+            (response[0].toInt() and 0xFF) or ((response[1].toInt() and 0xFF) shl 8) or ((response[2].toInt() and 0xFF) shl 16)
+        } else {
+            Log.e(LOG_TAG, INVALID_COUNTER_MSG)
+            -1
+        }
+    } catch (e: IOException) {
+        Log.e(LOG_TAG, ERROR_READING_COUNTER_MSG, e)
+        -1
+    }
 }
 
 fun getNfcTagFromIntent(intent: Intent?): Tag? {
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         intent?.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
     } else {
-        @Suppress("DEPRECATION")
-        intent?.getParcelableExtra(NfcAdapter.EXTRA_TAG)
+        @Suppress("DEPRECATION") intent?.getParcelableExtra(NfcAdapter.EXTRA_TAG)
     }
+}
+
+fun getTagId(tag: Tag): String {
+    return tag.id.joinToString(separator = "") { byte -> "%02X".format(byte) }
+}
+
+fun forceLocale(context: Context?): Context? {
+    val locale = Locale(LANGUAGE)
+    Locale.setDefault(locale)
+    val config = Configuration(context?.resources?.configuration)
+    config.setLocale(locale)
+    return context?.createConfigurationContext(config)
 }
