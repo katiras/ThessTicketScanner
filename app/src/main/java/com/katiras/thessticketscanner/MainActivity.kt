@@ -1,9 +1,7 @@
 package com.katiras.thessticketscanner
 
 import android.app.PendingIntent
-import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.MifareUltralight
@@ -56,22 +54,22 @@ import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
 import com.google.android.gms.ads.MobileAds
+import com.google.android.gms.ads.initialization.AdapterStatus
+import com.google.android.gms.ads.initialization.InitializationStatus
 import com.katiras.thessticketscanner.ui.theme.ThessTicketScannerTheme
 import java.io.IOException
-import java.util.Locale
 
 private const val LOG_TAG = "NFC"
 private const val AD_UNIT_ID = "ca-app-pub-3940256099942544/6300978111"
 private const val ERROR_CONNECT_MSG = "Error connecting to MIFARE Ultralight EV1 card"
 private const val INVALID_COUNTER_MSG = "Invalid counter value"
 private const val ERROR_READING_COUNTER_MSG = "Error reading first counter"
-private const val LANGUAGE = "el"
+private const val ADMOB_INIT_KEY = "com.google.android.gms.ads.MobileAds"
 private val READ_COUNTER_0_CMD = byteArrayOf(0x39.toByte(), 0x00.toByte())
 
 class MainActivity : ComponentActivity() {
     private var nfcAdapter: NfcAdapter? = null
     private var remainingTrips by mutableIntStateOf(0)
-    private var isScanned by mutableStateOf(false)
     private var isReadyToScan by mutableStateOf(true)
     private var isAdsInitialized by mutableStateOf(false)
     private var isNfcEnabled by mutableStateOf(false)
@@ -80,15 +78,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
-        MobileAds.initialize(this) { _ -> isAdsInitialized = true }
+        MobileAds.initialize(this) { initStatus ->
+            isAdsInitialized = isAdMobInitSuccess(initStatus)
+        }
         isNfcEnabled = nfcAdapter != null && nfcAdapter!!.isEnabled
 
         setContent {
             MainScreen(
                 remainingTrips = remainingTrips,
-                isScanned = isScanned,
+                isReadyToScan = isReadyToScan,
                 onScanAgain = {
-                    isScanned = false
                     isReadyToScan = true
                     enableNfcForegroundDispatch()
                 },
@@ -111,7 +110,7 @@ class MainActivity : ComponentActivity() {
                         val tagIdValue = getTagId(tag)
                         Log.i(LOG_TAG, tagIdValue)
                         remainingTrips = getRemainingTrips(counterValue)
-                        isScanned = true
+                        isReadyToScan = false
                     } catch (e: IOException) {
                         Log.e(LOG_TAG, ERROR_CONNECT_MSG, e)
                     } finally {
@@ -146,16 +145,12 @@ class MainActivity : ComponentActivity() {
             enableNfcForegroundDispatch()
         }
     }
-
-    override fun attachBaseContext(context: Context?) {
-        super.attachBaseContext(forceLocale(context))
-    }
 }
 
 @Composable
 fun CounterDisplay(
     remainingTrips: Int,
-    isScanned: Boolean,
+    isReadyToScan: Boolean,
     onScanAgain: () -> Unit,
     isNfcEnabled: Boolean
 ) {
@@ -173,7 +168,7 @@ fun CounterDisplay(
         ) {
             if (!isNfcEnabled) {
                 NfcDisabledScreen()
-            } else if (isScanned) {
+            } else if (!isReadyToScan) {
                 Text(
                     text = stringResource(R.string.available_trips_title),
                     fontSize = 24.sp,
@@ -208,7 +203,7 @@ fun CounterDisplay(
                 )
             }
         }
-        if (isScanned && isNfcEnabled) {
+        if (!isReadyToScan && isNfcEnabled) {
             Button(
                 onClick = onScanAgain,
                 modifier = Modifier
@@ -231,7 +226,7 @@ fun CounterDisplay(
 @Composable
 fun MainScreen(
     remainingTrips: Int,
-    isScanned: Boolean,
+    isReadyToScan: Boolean,
     onScanAgain: () -> Unit,
     isAdsInitialized: Boolean,
     isNfcEnabled: Boolean
@@ -258,7 +253,7 @@ fun MainScreen(
                 ) {
                     CounterDisplay(
                         remainingTrips = remainingTrips,
-                        isScanned = isScanned,
+                        isReadyToScan = isReadyToScan,
                         onScanAgain = onScanAgain,
                         isNfcEnabled = isNfcEnabled
                     )
@@ -280,15 +275,15 @@ fun MainScreen(
 
 @Composable
 fun AdBanner(adUnitId: String) {
-    AndroidView(factory = { context ->
-        AdView(context).apply {
-            setAdSize(AdSize.FULL_BANNER)
-            this.adUnitId = adUnitId
-            loadAd(AdRequest.Builder().build())
-        }
-    }, update = { adView ->
-        adView.loadAd(AdRequest.Builder().build())
-    }, modifier = Modifier.fillMaxWidth()
+    AndroidView(
+        factory = { context ->
+            AdView(context).apply {
+                setAdSize(AdSize.FULL_BANNER)
+                this.adUnitId = adUnitId
+                loadAd(AdRequest.Builder().build())
+            }
+        },
+        modifier = Modifier.fillMaxWidth()
     )
 }
 
@@ -369,10 +364,7 @@ fun getTagId(tag: Tag): String {
     return tag.id.joinToString(separator = "") { byte -> "%02X".format(byte) }
 }
 
-fun forceLocale(context: Context?): Context? {
-    val locale = Locale(LANGUAGE)
-    Locale.setDefault(locale)
-    val config = Configuration(context?.resources?.configuration)
-    config.setLocale(locale)
-    return context?.createConfigurationContext(config)
+fun isAdMobInitSuccess(status: InitializationStatus): Boolean {
+    val adapterStatusMap = status.adapterStatusMap
+    return adapterStatusMap[ADMOB_INIT_KEY]?.initializationState == AdapterStatus.State.READY
 }
