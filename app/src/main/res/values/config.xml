@@ -1,0 +1,4 @@
+<resources>
+    <string name="admob_top_banner_ad_unit_id" translatable="false">ca-app-pub-2340382244742098/9970351211</string>
+    <string name="admob_bottom_banner_ad_unit_id" translatable="false">ca-app-pub-2340382244742098/2201635856</string>
+</resources>

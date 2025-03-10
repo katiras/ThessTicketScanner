@@ -1,7 +1,10 @@
 package com.katiras.thessticketscanner
 
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.MifareUltralight
@@ -35,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,7 +64,6 @@ import com.katiras.thessticketscanner.ui.theme.ThessTicketScannerTheme
 import java.io.IOException
 
 private const val LOG_TAG = "NFC"
-private const val AD_UNIT_ID = "ca-app-pub-3940256099942544/6300978111"
 private const val ERROR_CONNECT_MSG = "Error connecting to MIFARE Ultralight EV1 card"
 private const val INVALID_COUNTER_MSG = "Invalid counter value"
 private const val ERROR_READING_COUNTER_MSG = "Error reading first counter"
@@ -73,6 +76,13 @@ class MainActivity : ComponentActivity() {
     private var isReadyToScan by mutableStateOf(true)
     private var isAdsInitialized by mutableStateOf(false)
     private var isNfcEnabled by mutableStateOf(false)
+    private val nfcStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == NfcAdapter.ACTION_ADAPTER_STATE_CHANGED) {
+                isNfcEnabled = nfcAdapter?.isEnabled == true
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -135,15 +145,16 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         nfcAdapter?.disableForegroundDispatch(this)
+        unregisterReceiver(nfcStateReceiver)
     }
 
     override fun onResume() {
         super.onResume()
-
         isNfcEnabled = nfcAdapter != null && nfcAdapter!!.isEnabled
         if (isReadyToScan && isNfcEnabled) {
             enableNfcForegroundDispatch()
         }
+        registerReceiver(nfcStateReceiver, IntentFilter(NfcAdapter.ACTION_ADAPTER_STATE_CHANGED))
     }
 }
 
@@ -241,7 +252,7 @@ fun MainScreen(
                         .wrapContentHeight()
                 ) {
                     if (isAdsInitialized) {
-                        AdBanner(adUnitId = AD_UNIT_ID)
+                        AdBanner(adUnitId = LocalContext.current.getString(R.string.admob_top_banner_ad_unit_id))
                     }
                 }
                 Box(
@@ -265,7 +276,7 @@ fun MainScreen(
                         .wrapContentHeight()
                 ) {
                     if (isAdsInitialized) {
-                        AdBanner(adUnitId = AD_UNIT_ID)
+                        AdBanner(adUnitId = LocalContext.current.getString(R.string.admob_bottom_banner_ad_unit_id))
                     }
                 }
             }
@@ -275,10 +286,19 @@ fun MainScreen(
 
 @Composable
 fun AdBanner(adUnitId: String) {
+    val context = LocalContext.current
+    val adSize = remember {
+        val displayMetrics = context.resources.displayMetrics
+        val widthPixels = displayMetrics.widthPixels
+        val density = displayMetrics.density
+        val adWidth = (widthPixels / density).toInt()
+        AdSize(adWidth, 90) // Fixed height of 90dp, full width
+    }
+
     AndroidView(
-        factory = { context ->
-            AdView(context).apply {
-                setAdSize(AdSize.FULL_BANNER)
+        factory = { ctx ->
+            AdView(ctx).apply {
+                setAdSize(adSize)
                 this.adUnitId = adUnitId
                 loadAd(AdRequest.Builder().build())
             }
