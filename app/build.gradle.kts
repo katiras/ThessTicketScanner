@@ -6,25 +6,29 @@ plugins {
 
 android {
     namespace = "com.katiras.thessticketscanner"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.katiras.thessticketscanner"
         minSdk = 24
-        targetSdk = 35
-        versionCode = 6
-        versionName = "1.5"
+        targetSdk = 36
+        versionCode = 8
+        versionName = "1.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
         }
     }
     compileOptions {

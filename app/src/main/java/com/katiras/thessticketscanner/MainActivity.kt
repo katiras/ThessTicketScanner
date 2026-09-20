@@ -156,6 +156,8 @@ class MainActivity : ComponentActivity() {
         }
         registerReceiver(nfcStateReceiver, IntentFilter(NfcAdapter.ACTION_ADAPTER_STATE_CHANGED))
     }
+
+
 }
 
 @Composable
@@ -388,3 +390,4 @@ fun isAdMobInitSuccess(status: InitializationStatus): Boolean {
     val adapterStatusMap = status.adapterStatusMap
     return adapterStatusMap[ADMOB_INIT_KEY]?.initializationState == AdapterStatus.State.READY
 }
+
