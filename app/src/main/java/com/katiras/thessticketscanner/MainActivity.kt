@@ -1,6 +1,5 @@
 package com.katiras.thessticketscanner
 
-import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -8,33 +7,29 @@ import android.content.IntentFilter
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.MifareUltralight
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -42,44 +37,50 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.airbnb.lottie.compose.LottieAnimation
 import com.airbnb.lottie.compose.LottieCompositionSpec
 import com.airbnb.lottie.compose.LottieConstants
 import com.airbnb.lottie.compose.rememberLottieComposition
+import com.google.android.gms.ads.AdListener
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
-import com.google.android.gms.ads.MobileAds
-import com.google.android.gms.ads.initialization.AdapterStatus
-import com.google.android.gms.ads.initialization.InitializationStatus
+import com.google.android.gms.ads.LoadAdError
 import com.katiras.thessticketscanner.ui.theme.ThessTicketScannerTheme
+import kotlinx.coroutines.delay
 import java.io.IOException
 
 private const val LOG_TAG = "NFC"
 private const val ERROR_CONNECT_MSG = "Error connecting to MIFARE Ultralight EV1 card"
 private const val INVALID_COUNTER_MSG = "Invalid counter value"
 private const val ERROR_READING_COUNTER_MSG = "Error reading first counter"
-private const val ADMOB_INIT_KEY = "com.google.android.gms.ads.MobileAds"
+private const val AD_LOG_TAG = "Ads"
+private const val AD_LOAD_FAILED_MSG = "Banner failed to load, code"
+
+private val AD_RETRY_DELAYS_MS = listOf(30_000L, 60_000L, 120_000L)
 private val READ_COUNTER_0_CMD = byteArrayOf(0x39.toByte(), 0x00.toByte())
 
 class MainActivity : ComponentActivity() {
+    private val viewModel: ScanViewModel by viewModels()
     private var nfcAdapter: NfcAdapter? = null
-    private var remainingTrips by mutableIntStateOf(0)
-    private var isReadyToScan by mutableStateOf(true)
-    private var isAdsInitialized by mutableStateOf(false)
     private var isNfcEnabled by mutableStateOf(false)
     private val nfcStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == NfcAdapter.ACTION_ADAPTER_STATE_CHANGED) {
-                isNfcEnabled = nfcAdapter?.isEnabled == true
+            if (intent.action != NfcAdapter.ACTION_ADAPTER_STATE_CHANGED) return
+            isNfcEnabled = nfcAdapter?.isEnabled == true
+            if (isNfcEnabled && viewModel.scanState is ScanState.Waiting) {
+                enableReaderMode()
             }
         }
     }
@@ -88,147 +89,147 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
-        MobileAds.initialize(this) { initStatus ->
-            isAdsInitialized = isAdMobInitSuccess(initStatus)
-        }
         isNfcEnabled = nfcAdapter != null && nfcAdapter!!.isEnabled
+
+        if (BuildConfig.CONSENT_ENABLED) {
+            ConsentGate.requestConsentThenInitializeAds(this)
+        }
 
         setContent {
             MainScreen(
-                remainingTrips = remainingTrips,
-                isReadyToScan = isReadyToScan,
+                scanState = viewModel.scanState,
                 onScanAgain = {
-                    isReadyToScan = true
-                    enableNfcForegroundDispatch()
+                    viewModel.scanState = ScanState.Waiting
+                    enableReaderMode()
                 },
-                isAdsInitialized = isAdsInitialized,
-                isNfcEnabled = isNfcEnabled
+                isNfcEnabled = isNfcEnabled,
+                adsAllowed = AdsInitializer.adsAllowed
             )
         }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        if (intent.action == NfcAdapter.ACTION_TAG_DISCOVERED) {
-            val nfcTag: Tag? = getNfcTagFromIntent(intent)
-            nfcTag?.let { tag ->
-                val mifareCard = MifareUltralight.get(tag)
-                mifareCard?.let { card ->
-                    try {
-                        card.connect()
-                        val counterValue = fetchFirstCounter(card)
-                        val tagIdValue = getTagId(tag)
-                        Log.i(LOG_TAG, tagIdValue)
-                        remainingTrips = getRemainingTrips(counterValue)
-                        isReadyToScan = false
-                    } catch (e: IOException) {
-                        Log.e(LOG_TAG, ERROR_CONNECT_MSG, e)
-                    } finally {
-                        card.close()
-                        isReadyToScan = false
-                    }
-                }
-            }
-        }
+    private fun enableReaderMode() {
+        nfcAdapter?.enableReaderMode(
+            this,
+            NfcAdapter.ReaderCallback { tag -> onTagDiscovered(tag) },
+            NfcAdapter.FLAG_READER_NFC_A or
+                NfcAdapter.FLAG_READER_NFC_B or
+                NfcAdapter.FLAG_READER_NFC_F or
+                NfcAdapter.FLAG_READER_NFC_V or
+                NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK,
+            null
+        )
     }
 
-    private fun enableNfcForegroundDispatch() {
-        val intent = Intent(this, javaClass).apply {
-            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    private fun disableReaderMode() {
+        nfcAdapter?.disableReaderMode(this)
+    }
+
+    private fun onTagDiscovered(tag: Tag) {
+        val result = readCard(tag)
+        runOnUiThread {
+            viewModel.scanState = result
+            disableReaderMode()
         }
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent, PendingIntent.FLAG_MUTABLE
-        )
-        nfcAdapter?.enableForegroundDispatch(this, pendingIntent, null, null)
     }
 
     override fun onPause() {
         super.onPause()
-        nfcAdapter?.disableForegroundDispatch(this)
-        unregisterReceiver(nfcStateReceiver)
+        disableReaderMode()
+        runCatching { unregisterReceiver(nfcStateReceiver) }
     }
 
     override fun onResume() {
         super.onResume()
-        isNfcEnabled = nfcAdapter != null && nfcAdapter!!.isEnabled
-        if (isReadyToScan && isNfcEnabled) {
-            enableNfcForegroundDispatch()
-        }
         registerReceiver(nfcStateReceiver, IntentFilter(NfcAdapter.ACTION_ADAPTER_STATE_CHANGED))
+        isNfcEnabled = nfcAdapter != null && nfcAdapter!!.isEnabled
+        if (viewModel.scanState is ScanState.Waiting && isNfcEnabled) {
+            enableReaderMode()
+        }
     }
-
-
 }
 
 @Composable
 fun CounterDisplay(
-    remainingTrips: Int,
-    isReadyToScan: Boolean,
+    scanState: ScanState,
     onScanAgain: () -> Unit,
     isNfcEnabled: Boolean
 ) {
-    Box(
+    if (!isNfcEnabled) {
+        NfcDisabledScreen()
+        return
+    }
+    Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Column(
             modifier = Modifier
-                .align(Alignment.Center)
-                .fillMaxHeight(0.8f),
+                .weight(1f)
+                .fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            if (!isNfcEnabled) {
-                NfcDisabledScreen()
-            } else if (!isReadyToScan) {
-                Text(
-                    text = stringResource(R.string.available_trips_title),
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-                Text(
-                    text = remainingTrips.toString(),
-                    fontSize = 64.sp,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                    lineHeight = 42.sp,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-            } else {
-                Text(
-                    text = stringResource(R.string.scan_prompt),
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(20.dp))
-                val composition by rememberLottieComposition(LottieCompositionSpec.RawRes(R.raw.nfc_animation))
-                LottieAnimation(
-                    composition = composition,
-                    iterations = LottieConstants.IterateForever,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(300.dp)
-                )
+            when (scanState) {
+                is ScanState.Success -> {
+                    Text(
+                        text = stringResource(R.string.available_trips_title),
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Text(
+                        text = scanState.remainingTrips.toString(),
+                        fontSize = 64.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 42.sp,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
+
+                is ScanState.Failed -> {
+                    Text(
+                        text = stringResource(scanState.message),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                ScanState.Waiting -> {
+                    Text(
+                        text = stringResource(R.string.scan_prompt),
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    val composition by rememberLottieComposition(LottieCompositionSpec.RawRes(R.raw.nfc_animation))
+                    LottieAnimation(
+                        composition = composition,
+                        iterations = LottieConstants.IterateForever,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(300.dp)
+                    )
+                }
             }
         }
-        if (!isReadyToScan && isNfcEnabled) {
+        if (scanState !is ScanState.Waiting) {
             Button(
                 onClick = onScanAgain,
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
                     .padding(bottom = 40.dp)
                     .fillMaxWidth(0.9f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Blue),
                 contentPadding = PaddingValues(vertical = 16.dp)
             ) {
                 Text(
                     text = stringResource(R.string.rescan_prompt),
-                    color = Color.White,
                     style = MaterialTheme.typography.bodyLarge
                 )
             }
@@ -238,47 +239,46 @@ fun CounterDisplay(
 
 @Composable
 fun MainScreen(
-    remainingTrips: Int,
-    isReadyToScan: Boolean,
+    scanState: ScanState,
     onScanAgain: () -> Unit,
-    isAdsInitialized: Boolean,
-    isNfcEnabled: Boolean
+    isNfcEnabled: Boolean,
+    adsAllowed: Boolean
 ) {
     ThessTicketScannerTheme {
         Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-            Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
                 Box(
                     modifier = Modifier
-                        .padding(WindowInsets.statusBars.asPaddingValues())
                         .fillMaxWidth()
                         .wrapContentHeight()
                 ) {
-                    if (isAdsInitialized) {
-                        AdBanner(adUnitId = LocalContext.current.getString(R.string.admob_top_banner_ad_unit_id))
+                    if (adsAllowed) {
+                        AdBanner(adUnitId = stringResource(R.string.admob_top_banner_ad_unit_id))
                     }
                 }
                 Box(
                     modifier = Modifier
-                        .weight(10f)
-                        .fillMaxSize()
-                        .padding(innerPadding),
+                        .weight(1f)
+                        .fillMaxWidth(),
                     contentAlignment = Alignment.Center
                 ) {
                     CounterDisplay(
-                        remainingTrips = remainingTrips,
-                        isReadyToScan = isReadyToScan,
+                        scanState = scanState,
                         onScanAgain = onScanAgain,
                         isNfcEnabled = isNfcEnabled
                     )
                 }
                 Box(
                     modifier = Modifier
-                        .padding(WindowInsets.navigationBars.asPaddingValues())
                         .fillMaxWidth()
                         .wrapContentHeight()
                 ) {
-                    if (isAdsInitialized) {
-                        AdBanner(adUnitId = LocalContext.current.getString(R.string.admob_bottom_banner_ad_unit_id))
+                    if (adsAllowed) {
+                        AdBanner(adUnitId = stringResource(R.string.admob_bottom_banner_ad_unit_id))
                     }
                 }
             }
@@ -289,39 +289,77 @@ fun MainScreen(
 @Composable
 fun AdBanner(adUnitId: String) {
     val context = LocalContext.current
-    val adSize = remember {
-        val displayMetrics = context.resources.displayMetrics
-        val widthPixels = displayMetrics.widthPixels
-        val density = displayMetrics.density
-        val adWidth = (widthPixels / density).toInt()
-        AdSize(adWidth, 90) // Fixed height of 90dp, full width
+    val resources = LocalResources.current
+    val adSize = remember(context, resources) {
+        val displayMetrics = resources.displayMetrics
+        val adWidth = (displayMetrics.widthPixels / displayMetrics.density).toInt()
+        AdSize.getLargeAnchoredAdaptiveBannerAdSize(context, adWidth)
+    }
+    var failedToLoad by remember { mutableStateOf(false) }
+    var retryAttempt by remember { mutableIntStateOf(0) }
+
+    val adView = remember(context, adUnitId, adSize) {
+        AdView(context).apply {
+            setAdSize(adSize)
+            this.adUnitId = adUnitId
+            adListener = object : AdListener() {
+                override fun onAdLoaded() {
+                    failedToLoad = false
+                    retryAttempt = 0
+                }
+
+                override fun onAdFailedToLoad(error: LoadAdError) {
+                    Log.w(AD_LOG_TAG, "$AD_LOAD_FAILED_MSG ${error.code}: ${error.message}")
+                    failedToLoad = true
+                }
+            }
+            loadAd(AdRequest.Builder().build())
+        }
     }
 
-    AndroidView(
-        factory = { ctx ->
-            AdView(ctx).apply {
-                setAdSize(adSize)
-                this.adUnitId = adUnitId
-                loadAd(AdRequest.Builder().build())
+    if (failedToLoad && retryAttempt < AD_RETRY_DELAYS_MS.size) {
+        LaunchedEffect(retryAttempt) {
+            delay(AD_RETRY_DELAYS_MS[retryAttempt])
+            adView.loadAd(AdRequest.Builder().build())
+            retryAttempt++
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, adView) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> adView.pause()
+                Lifecycle.Event.ON_RESUME -> adView.resume()
+                else -> Unit
             }
-        },
-        modifier = Modifier.fillMaxWidth()
-    )
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            adView.destroy()
+        }
+    }
+
+    if (!failedToLoad) {
+        AndroidView(factory = { adView }, modifier = Modifier.fillMaxWidth())
+    }
 }
 
 @Composable
 fun NfcDisabledScreen() {
     val context = LocalContext.current
 
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Column(
             modifier = Modifier
-                .align(Alignment.Center)
-                .fillMaxHeight(0.8f),
+                .weight(1f)
+                .fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -329,7 +367,7 @@ fun NfcDisabledScreen() {
                 text = stringResource(R.string.nfc_disabled_message),
                 fontSize = 18.sp,
                 textAlign = TextAlign.Center,
-                color = Color.Gray
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         Button(
@@ -337,57 +375,50 @@ fun NfcDisabledScreen() {
                 context.startActivity(Intent(android.provider.Settings.ACTION_NFC_SETTINGS))
             },
             modifier = Modifier
-                .align(Alignment.BottomCenter)
                 .padding(bottom = 40.dp)
                 .fillMaxWidth(0.9f),
-            colors = ButtonDefaults.buttonColors(containerColor = Color.Blue),
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
             Text(
                 text = stringResource(R.string.open_nfc_settings),
-                color = Color.White,
                 style = MaterialTheme.typography.bodyLarge
             )
         }
     }
 }
 
-fun getRemainingTrips(input: Int): Int {
-    val hexString = input.toString(16)
-    val trimmedHex = hexString.takeLast(4).padStart(4, '0')
-    val decimalValue = trimmedHex.toInt(16)
-    return 65535 - decimalValue
-}
+fun getRemainingTrips(counter: Int): Int = 65535 - (counter and 0xFFFF)
 
-fun fetchFirstCounter(card: MifareUltralight): Int {
+fun fetchFirstCounter(card: MifareUltralight): Int? {
     return try {
         val response = card.transceive(READ_COUNTER_0_CMD)
         if (response.size == 3) {
             (response[0].toInt() and 0xFF) or ((response[1].toInt() and 0xFF) shl 8) or ((response[2].toInt() and 0xFF) shl 16)
         } else {
             Log.e(LOG_TAG, INVALID_COUNTER_MSG)
-            -1
+            null
         }
     } catch (e: IOException) {
         Log.e(LOG_TAG, ERROR_READING_COUNTER_MSG, e)
-        -1
+        null
     }
 }
 
-fun getNfcTagFromIntent(intent: Intent?): Tag? {
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        intent?.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
-    } else {
-        @Suppress("DEPRECATION") intent?.getParcelableExtra(NfcAdapter.EXTRA_TAG)
+fun readCard(tag: Tag): ScanState {
+    val card = MifareUltralight.get(tag)
+        ?: return ScanState.Failed(R.string.error_unsupported_card)
+    return try {
+        card.connect()
+        val counter = fetchFirstCounter(card)
+        if (counter == null) {
+            ScanState.Failed(R.string.error_read_failed)
+        } else {
+            ScanState.Success(getRemainingTrips(counter))
+        }
+    } catch (e: IOException) {
+        Log.e(LOG_TAG, ERROR_CONNECT_MSG, e)
+        ScanState.Failed(R.string.error_read_failed)
+    } finally {
+        runCatching { card.close() }
     }
 }
-
-fun getTagId(tag: Tag): String {
-    return tag.id.joinToString(separator = "") { byte -> "%02X".format(byte) }
-}
-
-fun isAdMobInitSuccess(status: InitializationStatus): Boolean {
-    val adapterStatusMap = status.adapterStatusMap
-    return adapterStatusMap[ADMOB_INIT_KEY]?.initializationState == AdapterStatus.State.READY
-}
-

@@ -5,4 +5,6 @@
     <string name="rescan_prompt">Σκανάρετε ξανά</string>
     <string name="nfc_disabled_message">Ενεργοποιήστε το NFC στις ρυθμίσεις για να συνεχίσετε.</string>
     <string name="open_nfc_settings">Άνοιγμα Ρυθμίσεων NFC</string>
+    <string name="error_unsupported_card">Η κάρτα δεν υποστηρίζεται.</string>
+    <string name="error_read_failed">Δεν ήταν δυνατή η ανάγνωση της κάρτας. Δοκιμάστε ξανά.</string>
 </resources>

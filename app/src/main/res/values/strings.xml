@@ -5,4 +5,6 @@
     <string name="rescan_prompt">Scan again</string>
     <string name="nfc_disabled_message">Enable NFC in settings to continue.</string>
     <string name="open_nfc_settings">Open NFC Settings</string>
+    <string name="error_unsupported_card">This card is not supported.</string>
+    <string name="error_read_failed">Could not read the card. Please try again.</string>
 </resources>
