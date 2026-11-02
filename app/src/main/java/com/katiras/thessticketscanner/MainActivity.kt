@@ -295,8 +295,8 @@ fun AdBanner(adUnitId: String) {
         val adWidth = (displayMetrics.widthPixels / displayMetrics.density).toInt()
         AdSize.getLargeAnchoredAdaptiveBannerAdSize(context, adWidth)
     }
-    var failedToLoad by remember { mutableStateOf(false) }
-    var retryAttempt by remember { mutableIntStateOf(0) }
+    var loaded by remember { mutableStateOf(false) }
+    var failures by remember { mutableIntStateOf(0) }
 
     val adView = remember(context, adUnitId, adSize) {
         AdView(context).apply {
@@ -304,24 +304,24 @@ fun AdBanner(adUnitId: String) {
             this.adUnitId = adUnitId
             adListener = object : AdListener() {
                 override fun onAdLoaded() {
-                    failedToLoad = false
-                    retryAttempt = 0
+                    loaded = true
+                    failures = 0
                 }
 
                 override fun onAdFailedToLoad(error: LoadAdError) {
                     Log.w(AD_LOG_TAG, "$AD_LOAD_FAILED_MSG ${error.code}: ${error.message}")
-                    failedToLoad = true
+                    loaded = false
+                    failures++
                 }
             }
             loadAd(AdRequest.Builder().build())
         }
     }
 
-    if (failedToLoad && retryAttempt < AD_RETRY_DELAYS_MS.size) {
-        LaunchedEffect(retryAttempt) {
-            delay(AD_RETRY_DELAYS_MS[retryAttempt])
+    if (!loaded && failures in 1..AD_RETRY_DELAYS_MS.size) {
+        LaunchedEffect(failures) {
+            delay(AD_RETRY_DELAYS_MS[failures - 1])
             adView.loadAd(AdRequest.Builder().build())
-            retryAttempt++
         }
     }
 
@@ -341,8 +341,14 @@ fun AdBanner(adUnitId: String) {
         }
     }
 
-    if (!failedToLoad) {
-        AndroidView(factory = { adView }, modifier = Modifier.fillMaxWidth())
+    val gaveUp = !loaded && failures > AD_RETRY_DELAYS_MS.size
+    if (!gaveUp) {
+        AndroidView(
+            factory = { adView },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(adSize.height.dp)
+        )
     }
 }
 
